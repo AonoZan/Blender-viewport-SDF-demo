@@ -11,6 +11,9 @@ gpu::Shader *sdf_viewport_sdf_shader_create()
   if (!info) {
     info = new gpu::shader::ShaderCreateInfo("sdf_viewport_sdf");
 
+    /* Declare dynamic fragment depth write to disable early-Z testing */
+    info->depth_write(gpu::shader::DepthWrite::ANY);
+
     /* 1. Texture Binding */
     info->sampler(0, gpu::shader::ImageType::Float2D, "shapeDataTexture");
 
