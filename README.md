@@ -173,6 +173,23 @@ classes = (
     RENDER_PT_sdf_viewport_settings
 )
 ```
+/blender/source/blender/draw/engines/overlay/overlay_instance.cc
+Enable depth test for this new render engine so that grid can and other Viewport elements can use it.
+
+```
+    const bool viewport_uses_eevee = STREQ(
+        ED_view3d_engine_type(state.scene, state.v3d->shading.type)->idname,
+        RE_engine_id_BLENDER_EEVEE);
+    const bool viewport_uses_sdf = STREQ( <-- add bool
+        ED_view3d_engine_type(state.scene, state.v3d->shading.type)->idname,
+        "SDF_VIEWPORT");
+
+    state.is_render_depth_available = viewport_uses_workbench ||
+                                      (viewport_uses_eevee && !use_resolution_scaling) ||
+                                      viewport_uses_sdf; <-- and add it to depth test
+
+```
+
 Recompile.
 
 When you run compiled Blender, you can select "SDF Viewport" from render engine dropdown.
