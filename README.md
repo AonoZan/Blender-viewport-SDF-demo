@@ -1,11 +1,10 @@
-![Project Banner](./Screenshot.png)
-
 ## SDF demo done with Blender GPU module
 
 Copy python code and paste it in text editor, run the code to see render. You can duplicate, move, rotate and scale shapes. Performance is not that great with the more shapes you add. Ive tested with 100 shapes on RTX 3070 and its sluggish, 1000 shapes make FPS <1 so be aware of this.
 
+![Project Banner](./Screenshot.png)
 
-![SDF Native Render](./Screenshot_sdf_native.png)
+
 
 ## Native Blender Demo added (Tested only on Blender 5.0)
 
@@ -194,3 +193,5 @@ Enable depth test for this new render engine so that grid can and other Viewport
 Recompile.
 
 When you run compiled Blender, you can select "SDF Viewport" from render engine dropdown.
+
+![SDF Native Render](./Screenshot_sdf_native.png)
