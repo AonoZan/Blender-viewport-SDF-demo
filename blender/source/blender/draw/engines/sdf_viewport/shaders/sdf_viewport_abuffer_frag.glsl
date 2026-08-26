@@ -15,8 +15,9 @@ float sdf_sphere(float3 p_world, float4x4 shape_world_matrix, float r) {
                               length(shape_world_matrix[1].xyz), 
                               length(shape_world_matrix[2].xyz));
     float min_scale = max(0.0001, min(scale_vec.x, min(scale_vec.y, scale_vec.z)));
-    p_local /= min_scale; 
-    return (length(p_local) - r) * min_scale;
+    
+    float d_local = length(p_local) - r;
+    return d_local * min_scale;
 }
 
 float sdf_box(float3 p_world, float4x4 shape_world_matrix, float3 b_half_extents) {
@@ -26,7 +27,6 @@ float sdf_box(float3 p_world, float4x4 shape_world_matrix, float3 b_half_extents
                               length(shape_world_matrix[1].xyz), 
                               length(shape_world_matrix[2].xyz));
     float min_scale = max(0.0001, min(scale_vec.x, min(scale_vec.y, scale_vec.z)));
-    p_local /= min_scale;
     float3 q = abs(p_local) - b_half_extents;
     float d_local = length(max(q, float3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
     return d_local * min_scale;
@@ -39,7 +39,6 @@ float sdf_torus(float3 p_world, float4x4 shape_world_matrix, float2 t_radii) {
                               length(shape_world_matrix[1].xyz), 
                               length(shape_world_matrix[2].xyz));
     float min_scale = max(0.0001, min(scale_vec.x, min(scale_vec.y, scale_vec.z)));
-    p_local /= min_scale;
     float2 q = float2(length(p_local.xz) - t_radii.x, p_local.y);
     float d_local = length(q) - t_radii.y;
     return d_local * min_scale;
@@ -52,7 +51,6 @@ float sdf_cylinder(float3 p_world, float4x4 shape_world_matrix, float2 rh) {
                               length(shape_world_matrix[1].xyz), 
                               length(shape_world_matrix[2].xyz));
     float min_scale = max(0.0001, min(scale_vec.x, min(scale_vec.y, scale_vec.z)));
-    p_local /= min_scale;
     float2 d_abs = abs(float2(length(p_local.xz), p_local.y)) - rh;
     float d_local = min(max(d_abs.x, d_abs.y), 0.0) + length(max(d_abs, float2(0.0)));
     return d_local * min_scale;
@@ -76,7 +74,7 @@ float eval_shape_dist(int i, float3 p_world) {
     float shape_type_id = params_type.x;
     float4x4 shape_world_mat = get_matrix_from_texture(i, 1);
     float d_shape = maxDist;
-    if (shape_type_id < 0.5) { 
+    if (shape_type_id < 0.5) {
         d_shape = sdf_sphere(p_world, shape_world_mat, params_type.y);
     } else if (shape_type_id < 1.5) {
         d_shape = sdf_box(p_world, shape_world_mat, params_type.yzw);
@@ -88,24 +86,52 @@ float eval_shape_dist(int i, float3 p_world) {
     return d_shape;
 }
 
-float sdf_scene_with_info(float3 p_world, out int closest_shape_idx) {
-    closest_shape_idx = -1;
+// Evaluates overall scene distance while smoothly grouping shapes by selection mode
+float eval_scene_grouped(float3 p_world, out float out_d_active, out float out_d_selected, out float out_d_unselected) {
+    float d_scene = maxDist;
+    out_d_active = maxDist;
+    out_d_selected = maxDist;
+    out_d_unselected = maxDist;
+    
+    float k_smooth = 0.3;
+    bool has_act = false;
+    bool has_sel = false;
+    bool has_unsel = false;
+
+    for (int i = 0; i < numActiveShapes; ++i) {
+        float d_shape = eval_shape_dist(i, p_world);
+        float sel_status = get_shape_selection_status(i);
+
+        if (sel_status > 1.5) {
+            out_d_active = has_act ? smooth_min(out_d_active, d_shape, k_smooth) : d_shape;
+            has_act = true;
+        } else if (sel_status > 0.0) {
+            out_d_selected = has_sel ? smooth_min(out_d_selected, d_shape, k_smooth) : d_shape;
+            has_sel = true;
+        } else {
+            out_d_unselected = has_unsel ? smooth_min(out_d_unselected, d_shape, k_smooth) : d_shape;
+            has_unsel = true;
+        }
+
+        if (i == 0) {
+            d_scene = d_shape;
+        } else {
+            d_scene = smooth_min(d_scene, d_shape, k_smooth);
+        }
+    }
+
+    return d_scene;
+}
+
+float sdf_scene(float3 p_world) {
     if (numActiveShapes == 0) {
         return maxDist;
     }
 
     float d_final = maxDist;
-    float k_smooth = 0.3; 
-    float min_unblended_d = maxDist;
-
+    float k_smooth = 0.3;
     for (int i = 0; i < numActiveShapes; ++i) {
         float d_shape = eval_shape_dist(i, p_world);
-        
-        if (d_shape < min_unblended_d) {
-            min_unblended_d = d_shape;
-            closest_shape_idx = i;
-        }
-
         if (i == 0) {
             d_final = d_shape;
         } else {
@@ -115,13 +141,8 @@ float sdf_scene_with_info(float3 p_world, out int closest_shape_idx) {
     return d_final;
 }
 
-float sdf_scene(float3 p_world) {
-    int dummy_idx;
-    return sdf_scene_with_info(p_world, dummy_idx);
-}
-
 float3 compute_normal(float3 p_world) {
-    float eps = 0.001; 
+    float eps = 0.001;
     float2 h = float2(eps, 0.0);
     return normalize(float3(sdf_scene(p_world + h.xyy) - sdf_scene(p_world - h.xyy),
                             sdf_scene(p_world + h.yxy) - sdf_scene(p_world - h.yxy),
@@ -156,7 +177,6 @@ void main() {
     }
 
     float2 ndc = v_ndc;
-
     float4 p_near_clip = float4(ndc.x, ndc.y, -1.0, 1.0);
     float4 p_near_world = invViewProjectionMatrix * p_near_clip;
     p_near_world /= p_near_world.w;
@@ -175,70 +195,66 @@ void main() {
         ray_origin_world = ray_cam_plane - ray_direction_world * (maxDist * 0.25);
     }
 
-    float t = 0.0; 
-    const int MAX_RAY_STEPS = 256; 
+    float t = 0.0;
+    const int MAX_RAY_STEPS = 256;
     float outline_width_px = 1.75;
 
-    int hit_shape_idx = -1;
-    
-    // Track Active and Selected shapes completely independently
-    float min_active_pixels = 1e6;
-    float min_active_t = 0.0;
-    
-    float min_selected_pixels = 1e6;
-    float min_selected_t = 0.0;
+    float global_act_min_d = 100000.0;
+    float global_sel_min_d = 100000.0;
+    float act_hit_t = 0.0;
+    float sel_hit_t = 0.0;
 
     for (int i = 0; i < MAX_RAY_STEPS; ++i) {
         float3 current_pos_world = ray_origin_world + t * ray_direction_world;
-        int closest_shape = -1;
-        float dist_sdf = sdf_scene_with_info(current_pos_world, closest_shape);
         
         float pix_sz = compute_pixel_size(current_pos_world, t);
+        float px = max(pix_sz, 0.000001);
         float current_hit_epsilon = max(pix_sz * 0.25, 0.0001);
 
-        /* Continuously track distances for Active and Selected shapes */
-        if (closest_shape >= 0 && t > 0.01) {
-            float sel_status = get_shape_selection_status(closest_shape);
-            if (sel_status > 0.0) {
-                float d_pixels = dist_sdf / max(pix_sz, 1e-6);
-                
-                // > 1.5 implies Active, otherwise just Selected
-                if (sel_status > 1.5) {
-                    if (d_pixels < min_active_pixels) {
-                        min_active_pixels = d_pixels;
-                        min_active_t = t;
-                    }
-                } else {
-                    if (d_pixels < min_selected_pixels) {
-                        min_selected_pixels = d_pixels;
-                        min_selected_t = t;
-                    }
-                }
+        float d_act, d_sel, d_unsel;
+        float dist_sdf = eval_scene_grouped(current_pos_world, d_act, d_sel, d_unsel);
+
+        // Track minimum distance to group silhouettes along the ray
+        if (d_act < maxDist) {
+            float act_d_px = abs(d_act) / px;
+            if (act_d_px < global_act_min_d) {
+                global_act_min_d = act_d_px;
+                act_hit_t = t;
+            }
+        }
+        if (d_sel < maxDist) {
+            float sel_d_px = abs(d_sel) / px;
+            if (sel_d_px < global_sel_min_d) {
+                global_sel_min_d = sel_d_px;
+                sel_hit_t = t;
             }
         }
 
-        /* Surface intersection reached */
+        // --- Surface Hit ---
         if (dist_sdf < current_hit_epsilon) {
-            hit_shape_idx = closest_shape;
             float3 normal_world = compute_normal(current_pos_world);
-            float3 color_shaded = matcap_color(normal_world); 
+            float3 color_shaded = matcap_color(normal_world);
             float4 pos_clip = viewProjectionMatrix * float4(current_pos_world, 1.0);
-            float depth_ndc = pos_clip.z / pos_clip.w; 
-            gl_FragDepth = clamp(depth_ndc * 0.5 + 0.5, 0.0, 1.0); 
+            float depth_ndc = pos_clip.z / pos_clip.w;
+            gl_FragDepth = clamp(depth_ndc * 0.5 + 0.5, 0.0, 1.0);
 
             float3 final_color = color_shaded;
-            float primary_sel_status = get_shape_selection_status(hit_shape_idx);
 
-            // Overlay Active outline if surface is NOT Active (allows active outline to draw over selected shapes)
-            if (primary_sel_status < 1.5 && min_active_pixels < outline_width_px) {
-                float3 active_col = float3(1.0, 0.666, 0.117); // Exact Blender Active Color (#FFAA1E)
-                float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), min_active_pixels);
+            // Determine if hit surface belongs to active or selected group
+            bool is_active_surface = (d_act <= d_sel + 0.001) && (d_act <= d_unsel + 0.001);
+            bool is_selected_surface = (d_sel <= d_act + 0.001) && (d_sel <= d_unsel + 0.001);
+
+            // Compute silhouette distance across blended group boundaries
+            float active_outline_d = is_active_surface ? (abs(d_act - min(d_sel, d_unsel)) / px) : global_act_min_d;
+            float selected_outline_d = is_selected_surface ? (abs(d_sel - min(d_act, d_unsel)) / px) : global_sel_min_d;
+
+            if (active_outline_d < outline_width_px) {
+                float3 active_col = float3(1.0, 0.666, 0.117);
+                float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), active_outline_d);
                 final_color = mix(final_color, active_col, alpha);
-            } 
-            // Overlay Selected outline only if surface is completely UNSELECTED
-            else if (primary_sel_status == 0.0 && min_selected_pixels < outline_width_px) {
-                float3 sel_col = float3(0.941, 0.353, 0.047); // Exact Blender Selected Color (#F05A0C)
-                float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), min_selected_pixels);
+            } else if (selected_outline_d < outline_width_px) {
+                float3 sel_col = float3(0.941, 0.353, 0.047);
+                float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), selected_outline_d);
                 final_color = mix(final_color, sel_col, alpha);
             }
 
@@ -246,33 +262,31 @@ void main() {
             return;
         }
 
-        t += max(dist_sdf, current_hit_epsilon); 
+        float step_factor = (global_act_min_d < outline_width_px * 3.0 || global_sel_min_d < outline_width_px * 3.0) ? 0.35 : 1.0;
+        t += max(dist_sdf * step_factor, current_hit_epsilon);
+
         if (t > maxDist) {
             break;
         }
     }
 
-    /* Background rays (missed all primary surfaces) */
-    
-    // Draw Active Outline priority
-    if (min_active_pixels < outline_width_px) {
-        float3 sel_pos = ray_origin_world + min_active_t * ray_direction_world;
+    // --- Silhouette Pass (Rays missing surfaces) ---
+    if (global_act_min_d < outline_width_px) {
+        float3 sel_pos = ray_origin_world + act_hit_t * ray_direction_world;
         float4 pos_clip = viewProjectionMatrix * float4(sel_pos, 1.0);
         gl_FragDepth = clamp((pos_clip.z / pos_clip.w) * 0.5 + 0.5, 0.0, 1.0);
 
         float3 active_col = float3(1.0, 0.666, 0.117);
-        float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), min_active_pixels);
+        float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), global_act_min_d);
         FragColor = float4(active_col, alpha);
         return;
-    } 
-    // Draw Selected Outline fallback
-    else if (min_selected_pixels < outline_width_px) {
-        float3 sel_pos = ray_origin_world + min_selected_t * ray_direction_world;
+    } else if (global_sel_min_d < outline_width_px) {
+        float3 sel_pos = ray_origin_world + sel_hit_t * ray_direction_world;
         float4 pos_clip = viewProjectionMatrix * float4(sel_pos, 1.0);
         gl_FragDepth = clamp((pos_clip.z / pos_clip.w) * 0.5 + 0.5, 0.0, 1.0);
 
         float3 sel_col = float3(0.941, 0.353, 0.047);
-        float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), min_selected_pixels);
+        float alpha = smoothstep(outline_width_px, max(outline_width_px - 1.0, 0.0), global_sel_min_d);
         FragColor = float4(sel_col, alpha);
         return;
     }
