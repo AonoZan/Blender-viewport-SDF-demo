@@ -22,6 +22,23 @@ Include headers at the top:
 
 #include "GPU_context.hh"
 ```
+Enable sdf render in solid view mode, this essentialy changes how is blender suppose to draw objects in solid view so might not be acceptable.
+Replace Switch case for OB_WIRE and OB_SOLID with this:
+```
+switch (drawtype) {
+      case OB_WIRE:
+        view_data.workbench.set_used(true);
+        break;
+      case OB_SOLID:
+        if ((render_engine_type->flag & RE_INTERNAL) == 0) {
+          view_data.external.set_used(true);
+        }
+        else {
+          view_data.workbench.set_used(true);
+        }
+        break;
+```
+
 blender/source/blender/draw/CMakeLists.txt
 ```
   engines/overlay/overlay_mode_transfer.cc
